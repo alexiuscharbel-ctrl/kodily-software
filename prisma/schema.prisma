@@ -1,0 +1,200 @@
+// Tenant-aware schema for the payment-aware support platform.
+// All monetary values are integer minor units (amountMinor), never floats.
+// Tenant isolation must additionally be enforced in the data-access layer;
+// schema design alone is not an authorization boundary.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model Tenant {
+  id        String   @id @default(cuid())
+  name      String
+  createdAt DateTime @default(now())
+
+  memberships        TenantMembership[]
+  customers          Customer[]
+  tickets            Ticket[]
+  paymentConnections PaymentConnection[]
+  transactions       PaymentTransaction[]
+  incidents          Incident[]
+}
+
+model User {
+  id           String   @id @default(cuid())
+  email        String   @unique
+  displayName  String
+  passwordHash String
+  createdAt    DateTime @default(now())
+
+  memberships TenantMembership[]
+}
+
+enum TenantRole {
+  OWNER
+  AGENT
+  VIEWER
+}
+
+model TenantMembership {
+  id       String     @id @default(cuid())
+  userId   String
+  tenantId String
+  role     TenantRole @default(AGENT)
+
+  user   User   @relation(fields: [userId], references: [id])
+  tenant Tenant @relation(fields: [tenantId], references: [id])
+
+  @@unique([userId, tenantId])
+}
+
+model Customer {
+  id       String  @id @default(cuid())
+  tenantId String
+  fullName String
+  phone    String
+  email    String?
+
+  tenant       Tenant                @relation(fields: [tenantId], references: [id])
+  tickets      Ticket[]
+  transactions PaymentTransaction[]
+
+  @@index([tenantId])
+}
+
+enum TicketStatus {
+  OPEN
+  PENDING
+  RESOLVED
+  CLOSED
+}
+
+enum TicketPriority {
+  LOW
+  MEDIUM
+  HIGH
+  URGENT
+}
+
+enum TicketChannel {
+  WHATSAPP
+  EMAIL
+  PHONE
+  WEB
+}
+
+model Ticket {
+  id                   String         @id @default(cuid())
+  tenantId             String
+  customerId           String
+  subject              String
+  channel              TicketChannel
+  status               TicketStatus   @default(OPEN)
+  priority             TicketPriority @default(MEDIUM)
+  transactionReference String?
+  incidentId           String?
+  createdAt            DateTime       @default(now())
+  updatedAt            DateTime       @updatedAt
+
+  tenant   Tenant    @relation(fields: [tenantId], references: [id])
+  customer Customer  @relation(fields: [customerId], references: [id])
+  incident Incident? @relation(fields: [incidentId], references: [id])
+  events   TicketEvent[]
+
+  @@index([tenantId, status])
+  @@index([tenantId, customerId, transactionReference])
+}
+
+model TicketEvent {
+  id        String   @id @default(cuid())
+  ticketId  String
+  actorId   String?
+  eventType String
+  detail    String
+  createdAt DateTime @default(now())
+
+  ticket Ticket @relation(fields: [ticketId], references: [id])
+
+  @@index([ticketId, createdAt])
+}
+
+model PaymentConnection {
+  id              String   @id @default(cuid())
+  tenantId        String
+  provider        String
+  status          String   @default("mock")
+  credentialsRef  String?
+  createdAt       DateTime @default(now())
+
+  tenant Tenant @relation(fields: [tenantId], references: [id])
+
+  @@index([tenantId])
+}
+
+enum NormalizedPaymentStatus {
+  PENDING
+  SUCCESSFUL
+  FAILED
+  REVERSED
+  UNKNOWN
+}
+
+model PaymentTransaction {
+  id               String                  @id @default(cuid())
+  tenantId         String
+  customerId       String?
+  reference        String
+  provider         String
+  providerStatus   String
+  normalizedStatus NormalizedPaymentStatus @default(UNKNOWN)
+  amountMinor      Int
+  currency         String
+  occurredAt       DateTime
+  createdAt        DateTime                @default(now())
+
+  tenant   Tenant    @relation(fields: [tenantId], references: [id])
+  customer Customer? @relation(fields: [customerId], references: [id])
+  events   PaymentEvent[]
+
+  @@unique([tenantId, provider, reference])
+  @@index([tenantId, normalizedStatus])
+}
+
+model PaymentEvent {
+  id                 String   @id @default(cuid())
+  transactionId      String
+  providerEventId    String
+  rawStatus          String
+  normalizedStatus   NormalizedPaymentStatus @default(UNKNOWN)
+  payloadHash        String
+  receivedAt         DateTime @default(now())
+
+  transaction PaymentTransaction @relation(fields: [transactionId], references: [id])
+
+  @@unique([transactionId, providerEventId])
+}
+
+enum IncidentStatus {
+  INVESTIGATING
+  MONITORING
+  RESOLVED
+}
+
+model Incident {
+  id       String         @id @default(cuid())
+  tenantId String
+  title    String
+  summary  String
+  status   IncidentStatus @default(INVESTIGATING)
+  openedAt DateTime       @default(now())
+
+  tenant  Tenant   @relation(fields: [tenantId], references: [id])
+  tickets Ticket[]
+
+  @@index([tenantId, status])
+}
